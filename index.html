@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <title>GitLab Project board</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+  <script src="https://unpkg.com/vue"></script>
+  <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+
+  <script src="https://unpkg.com/vue-tables-2/dist/vue-tables-2.min.js"></script>
+  <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css" integrity="sha384-MCw98/SFnGE8fJT3GXwEOngsV7Zt27NXFoaoApmYm81iuXoPkFOJwJ8ERdknLPMO" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://use.fontawesome.com/releases/v5.2.0/css/all.css" integrity="sha384-hWVjflwFxL6sNzntih27bfxkr27PmbbK/iSvJ+a4+0owXq79v+lsFkW54bOGbiDQ" crossorigin="anonymous">
+</head>
+
+<body>
+  <div id="app">
+    <nav class="navbar navbar-expand-md navbar-dark bg-dark">
+      <a class="navbar-brand" href="#"><i v-if="pending > 0" class="fa fa-spinner fa-spin mr-2"></i>GitLab Project Dashboard</a>
+
+      <div class="collapse navbar-collapse">
+        <ul class="navbar-nav mr-auto">
+        </ul>
+        <form class="form-inline my-2 my-lg-0">
+          <input class="form-control mr-sm-2" type="text" v-model="gitlab">
+          <input class="form-control mr-sm-2" type="password" v-model="token">
+          <button class="btn btn-outline-light my-2 my-sm-0" type="submit" v-on:click="_list_projects">Refresh</button>
+        </form>
+      </div>
+    </nav>
+
+    <main role="main" class="container">
+      <div class="row">
+        <div class="col-sm-12">
+          <v-client-table v-if="loaded" :name="gitlab" :data="projects" :columns="columns" :options="options">
+          </v-client-table>
+          <div v-else class="text-center mt-5">
+            <h1>Loading...</h1>
+            <i class="fa fa-spinner fa-spin fa-2x"></i>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  <script>
+    Vue.use(VueTables.ClientTable);
+
+    function rowClassCallback(row) {
+      return {
+        failed: 'table-danger',
+        running: 'table-info',
+        skipped: 'table-warning',
+      }[row.pipeline_status]
+    }
+    var app = new Vue({
+      el: '#app',
+      data: {
+        timer: null,
+        pending: 0,
+        loaded: false,
+        gitlab: '',
+        token: '',
+        per_page: 100,
+        refresh: 30,
+        projects: [],
+        columns: ['path_with_namespace', 'pipeline_status', 'coverage'],
+        options: {
+          saveState: true,
+          perPage: 100,
+          rowClassCallback: rowClassCallback,
+          sortIcon: {
+            base: 'fa',
+            up: 'fa-sort-up',
+            down: 'fa-sort-down',
+            is: 'fa-sort',
+          },
+          customSorting: {
+            pipeline_status: function(ascending) {
+              order = ['failed', 'cancelled', 'skipped', 'success', null];
+              return function(a, b) {
+                return (ascending ? 1 : -1) * (order.indexOf(a.pipeline_status) - order.indexOf(b.pipeline_status));
+              }
+            }
+          },
+        }
+      },
+      created: function() {
+        this.timer = setInterval(this.fetch, this.refresh * 1000);
+        thisvue = this;
+        axios.interceptors.request.use(function(config) {
+          thisvue.pending++;
+          return config;
+        }, function(error) {
+          return Promise.reject(error);
+        });
+
+        // Add a response interceptor
+        axios.interceptors.response.use(function(response) {
+          thisvue.pending--;
+          return response;
+        }, function(error) {
+          return Promise.reject(error);
+        });
+      },
+      mounted() {
+        // Check cached values
+        if (localStorage.gitlab) this.gitlab = localStorage.gitlab;
+        if (localStorage.token) this.token = localStorage.token;
+        // fetch data from GitLab API
+        this.fetch();
+      },
+      watch: {
+        // Update cached values on change
+        gitlab(val) {
+          localStorage.gitlab = val;
+        },
+        token(val) {
+          localStorage.token = val;
+        },
+      },
+      methods: {
+        _find_project: function(l, p) {
+          return this.projects.find(x => {
+            return x.id == p.id;
+          })
+        },
+        _get: function(path) {
+          opts = this.token.length > 0 ? {
+            headers: {
+              'Private-Token': this.token
+            }
+          } : {};
+          return axios.get(this.gitlab + '/api/v4' + path, opts);
+        },
+        _get_status: function(p) {
+          return this._get('/projects/' + p.id + '/pipelines?per_page=1&ref=' + p.default_branch).then(response => (response.data.length > 0 ? (pipeline = response.data[0],
+            project = this._find_project(this.projects, p), project.pipeline_status = pipeline.status,
+            this._get('/projects/' + p.id + '/pipelines/' + pipeline.id).then(pipeline_response => (this._find_project(this.projects, p).coverage = pipeline_response.data.coverage))) : undefined))
+        },
+        _merge_projects: function(data) {
+          project = this._find_project(this.projects, data);
+          if (project) {
+            data.pipeline_status = project.pipeline_status;
+            data.coverage = project.coverage;
+          } else {
+            data.pipeline_status = undefined;
+            data.coverage = undefined;
+          }
+          project = data;
+        },
+        _list_projects: function() {
+          this._get('/projects?simple=true&membership=true&per_page=' + this.per_page)
+            .then(response => (this.loaded = true, this.loading = false, this.projects = response.data.map(p => {
+              this._merge_projects(p);
+              this._get_status(p);
+              return p
+            })))
+        },
+        fetch: function() {
+          this.loading = true;
+          this._list_projects();
+        }
+      }
+    })
+  </script>
+  <script src="https://code.jquery.com/jquery-3.3.1.slim.min.js" integrity="sha384-q8i/X+965DzO0rT7abK41JStQIAqVgRVzpbzo5smXKp4YfRvH+8abtTE1Pi6jizo" crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/popper.js/1.14.3/umd/popper.min.js" integrity="sha384-ZMP7rVo3mIykV+2+9J3UJ46jBk0WLaUAdn689aCwoqbBJiSnjAK/l8WvCWPIPm49" crossorigin="anonymous"></script>
+  <script src="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/js/bootstrap.min.js" integrity="sha384-ChfqqxuZUCnJSK3+MXmPNIyE6ZbWh2IMqE241rYiqJxyMiZ6OW/JmZQ5stwEULTy" crossorigin="anonymous"></script>
+</body>
+
+</html>
