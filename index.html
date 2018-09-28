@@ -139,22 +139,26 @@
         },
         _merge_projects: function(data) {
           project = this._find_project(this.projects, data);
-          if (project) {
-            data.pipeline_status = project.pipeline_status;
-            data.coverage = project.coverage;
-          } else {
+          if (!project) {
             data.pipeline_status = undefined;
             data.coverage = undefined;
+            this.projects.push(data);
           }
-          project = data;
         },
-        _list_projects: function() {
-          this._get('/projects?simple=true&membership=true&per_page=' + this.per_page)
-            .then(response => (this.loaded = true, this.loading = false, this.projects = response.data.map(p => {
-              this._merge_projects(p);
-              this._get_status(p);
-              return p
-            })))
+        _list_projects: function(page = 1) {
+          this._get('/projects?simple=true&membership=true&page=' + page + '&archived=0&per_page=' + this.per_page)
+            .then(response => {
+              this.loaded = true;
+              this.loading = false;
+              response.data.map(p => {
+                this._merge_projects(p);
+                this._get_status(p);
+              });
+              next_page = parseInt(response.headers['x-next-page']);
+              if (next_page > 0) {
+                this._list_projects(next_page);
+              }
+            });
         },
         fetch: function() {
           this.loading = true;
